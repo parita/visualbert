@@ -74,7 +74,7 @@ GENDER_NEUTRAL_NAMES = ['Casey', 'Riley', 'Jessie', 'Jackie', 'Avery', 'Jaime', 
 # "match_index": 0,
 # }
 
-class VCR(Dataset):
+class MPII(Dataset):
     def __init__(self,
             split,
             mode,

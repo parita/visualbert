@@ -1195,7 +1195,9 @@ class BertEmbeddingsWithVisualEmbedding(nn.Module):
         self.position_embeddings_visual.weight = torch.nn.Parameter(deepcopy(self.position_embeddings.weight.data), requires_grad = True)
         return
 
-    def forward(self, input_ids, token_type_ids=None, visual_embeddings=None, visual_embeddings_type=None, position_embeddings_visual=None, image_text_alignment = None, confidence = None):
+    def forward(self, input_ids=None, token_type_ids=None, visual_embeddings=None,
+                visual_embeddings_type=None, position_embeddings_visual=None,
+                image_text_alignment = None, confidence = None):
         '''
         input_ids = [batch_size, sequence_length]
         token_type_ids = [batch_size, sequence_length]
@@ -1204,17 +1206,20 @@ class BertEmbeddingsWithVisualEmbedding(nn.Module):
         confidence = [batch_size, image_feature_length] of type LongTensor
         '''
 
-        seq_length = input_ids.size(1)
-        position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
-        position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-        if token_type_ids is None:
-            token_type_ids = torch.zeros_like(input_ids)
+        if input_ids is not None:
+            seq_length = input_ids.size(1)
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
+            position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
+            if token_type_ids is None:
+                token_type_ids = torch.zeros_like(input_ids)
 
-        words_embeddings = self.word_embeddings(input_ids)
+            words_embeddings = self.word_embeddings(input_ids)
 
-        position_embeddings = self.position_embeddings(position_ids)
-        token_type_embeddings = self.token_type_embeddings(token_type_ids)
-        embeddings = words_embeddings + position_embeddings + token_type_embeddings
+            position_embeddings = self.position_embeddings(position_ids)
+            token_type_embeddings = self.token_type_embeddings(token_type_ids)
+            w_embeddings = words_embeddings + position_embeddings + token_type_embeddings
+        else:
+            w_embeddings = None
 
         if visual_embeddings is not None:
             visual_embeddings = self.projection(visual_embeddings)
@@ -1237,7 +1242,7 @@ class BertEmbeddingsWithVisualEmbedding(nn.Module):
 
                 position_ids_visual = torch.zeros(*visual_embeddings.size()[:-1], dtype = torch.long).cuda()
 
-                # When fine-tuning the detector , the image_text_alignment is sometimes padded too long. 
+                # When fine-tuning the detector , the image_text_alignment is sometimes padded too long.
                 if position_embeddings_visual.size(1) != visual_embeddings.size(1):
                     assert(position_embeddings_visual.size(1) >= visual_embeddings.size(1))
                     position_embeddings_visual = position_embeddings_visual[:, :visual_embeddings.size(1), :]
@@ -1248,9 +1253,17 @@ class BertEmbeddingsWithVisualEmbedding(nn.Module):
                 position_embeddings_visual = self.position_embeddings_visual(position_ids_visual)
 
             v_embeddings = visual_embeddings + position_embeddings_visual + token_type_embeddings_visual
+        else:
+            v_embeddings = None
 
+        # Either word or visual embeddings MUST exist
+        if w_embeddings is None:
+            embeddings = v_embeddings
+        elif v_embeddings is None:
+            embeddings = w_embeddings
+        else:
             # Concate the two:
-            embeddings = torch.cat((embeddings, v_embeddings), dim = 1) # concat the visual embeddings after the attentions
+            embeddings = torch.cat((w_embeddings, v_embeddings), dim = 1) # concat the visual embeddings after the attentions
 
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
@@ -1264,15 +1277,56 @@ class BertVisualModel(PreTrainedBertModel):
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
         self.bypass_transformer = config.bypass_transformer
+        self.visual_only = config.visual_only
 
         if self.bypass_transformer:
-            self.additional_layer = BertLayer(config)   
+            self.additional_layer = BertLayer(config)
 
-        self.output_attention_weights = config.output_attention_weights         
+        self.output_attention_weights = config.output_attention_weights
 
         self.apply(self.init_bert_weights)
 
-    def forward(self, input_ids, token_type_ids, attention_mask, visual_embeddings, position_embeddings_visual, visual_embeddings_type, image_text_alignment, confidence, output_all_encoded_layers=True):
+    def forward(self, input_ids, token_type_ids, attention_mask,
+                visual_embeddings, position_embeddings_visual, visual_embeddings_type,
+                image_text_alignment, confidence, output_all_encoded_layers=True):
+
+        embedding_output = self.embeddings(
+            input_ids = input_ids, token_type_ids = token_type_ids,
+            visual_embeddings = visual_embeddings,
+            position_embeddings_visual = position_embeddings_visual,
+            visual_embeddings_type = visual_embeddings_type,
+            image_text_alignment = image_text_alignment,
+            confidence = confidence
+        )
+
+        # print("Input IDs: {}".format(input_ids.size()))
+        # print("Visual Embedding: {}".format(visual_embeddings.size()))
+
+        # Added by Parita for is_next_image pre-training
+        if self.visual_only:
+            #if visual_attention_mask is None:
+            visual_attention_mask = torch.ones(visual_embeddings.size()[:2], dtype = torch.long).cuda()
+
+            extended_visual_attention_mask = visual_attention_mask.unsqueeze(1).unsqueeze(2)
+
+            extended_visual_attention_mask = extended_visual_attention_mask.to(dtype=next(self.parameters()).dtype) # fp16 compatibility
+            extended_visual_attention_mask = (1.0 - extended_visual_attention_mask) * -10000.0
+
+               # Ignore text if it exists
+            if input_ids is not None:
+                text_length = input_ids.size(1)
+                embedding_output = embedding_output[:, text_length:, :]
+
+            encoded_layers = self.encoder(embedding_output, extended_visual_attention_mask,
+                                          output_all_encoded_layers = output_all_encoded_layers)
+            sequence_output = encoded_layers[-1]
+            pooled_output = self.pooler(sequence_output)
+
+            if not output_all_encoded_layers:
+                encoded_layers = encoded_layers[-1]
+
+            return encoded_layers, pooled_output
+
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
         if token_type_ids is None:
@@ -1293,8 +1347,6 @@ class BertVisualModel(PreTrainedBertModel):
         extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype) # fp16 compatibility
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
 
-        embedding_output = self.embeddings(input_ids, token_type_ids, visual_embeddings = visual_embeddings, position_embeddings_visual = position_embeddings_visual, visual_embeddings_type = visual_embeddings_type, image_text_alignment = image_text_alignment,
-            confidence = confidence)
 
         if self.bypass_transformer and visual_embeddings is not None:
             assert(not output_all_encoded_layers) # Don't support this for the bypass model
@@ -1333,7 +1385,11 @@ class BertVisualModel(PreTrainedBertModel):
             return encoded_layers, pooled_output
 
 class TrainVisualBERTObjective(PreTrainedBertModel):
-    def __init__(self, config, training_head_type, visual_embedding_dim = 512, hard_cap_seq_len = None, cut_first = "text", embedding_strategy = "plain", bypass_transformer = False, output_attention_weights= False):
+    def __init__(self, config, training_head_type, visual_embedding_dim = 512,
+                 hard_cap_seq_len = None, cut_first = "text", visual_only = False,
+                 embedding_strategy = "plain", bypass_transformer = False,
+                 output_attention_weights= False):
+
         super(TrainVisualBERTObjective, self).__init__(config)
         config.visual_embedding_dim = visual_embedding_dim
 
@@ -1341,8 +1397,10 @@ class TrainVisualBERTObjective(PreTrainedBertModel):
 
         config.bypass_transformer = bypass_transformer
 
-        config.output_attention_weights = output_attention_weights  
-        self.output_attention_weights = output_attention_weights  
+        config.output_attention_weights = output_attention_weights
+        config.visual_only = visual_only
+
+        self.output_attention_weights = output_attention_weights
 
         self.cut_first = cut_first
         self.hard_cap_seq_len = hard_cap_seq_len
@@ -1371,14 +1429,14 @@ class TrainVisualBERTObjective(PreTrainedBertModel):
         self.apply(self.init_bert_weights)
 
     def forward(
-        self, 
-        input_ids, 
-        token_type_ids, 
+        self,
+        input_ids,
+        token_type_ids,
         input_mask,
 
         visual_embeddings,
-        position_embeddings_visual, 
-        image_mask, 
+        position_embeddings_visual,
+        image_mask,
         image_text_alignment = None,
         confidence = None,
 
@@ -1413,7 +1471,7 @@ class TrainVisualBERTObjective(PreTrainedBertModel):
             else:
                 visual_embeddings_type = None
 
-        if flat_image_mask is not None:
+        if flat_image_mask is not None and flat_input_mask is not None:
             flat_attention_mask = torch.cat((flat_input_mask, flat_image_mask), dim = -1)
 
             assert(image_lm_lables is None) # Do not support this yet
@@ -1429,11 +1487,11 @@ class TrainVisualBERTObjective(PreTrainedBertModel):
 
         if self.output_attention_weights:
             sequence_output, pooled_output, attention_weights = self.bert(
-            flat_input_ids, 
-            flat_token_type_ids, 
+            flat_input_ids,
+            flat_token_type_ids,
             flat_attention_mask,
-            visual_embeddings = flat_visual_embeddings, 
-            position_embeddings_visual = flat_position_embeddings_visual, 
+            visual_embeddings = flat_visual_embeddings,
+            position_embeddings_visual = flat_position_embeddings_visual,
             visual_embeddings_type = visual_embeddings_type,
             image_text_alignment = flat_image_text_alignment,
             confidence = flat_confidence,
@@ -1443,16 +1501,18 @@ class TrainVisualBERTObjective(PreTrainedBertModel):
             output_dict['loss'] = None
             return output_dict
 
+
         sequence_output, pooled_output = self.bert(
-            flat_input_ids, 
-            flat_token_type_ids, 
+            flat_input_ids,
+            flat_token_type_ids,
             flat_attention_mask,
-            visual_embeddings = flat_visual_embeddings, 
-            position_embeddings_visual = flat_position_embeddings_visual, 
+            visual_embeddings = flat_visual_embeddings,
+            position_embeddings_visual = flat_position_embeddings_visual,
             visual_embeddings_type = visual_embeddings_type,
             image_text_alignment = flat_image_text_alignment,
             confidence = flat_confidence,
-            output_all_encoded_layers=output_all_encoded_layers)
+            output_all_encoded_layers=output_all_encoded_layers
+        )
 
         output_dict = {}
 
@@ -1461,6 +1521,7 @@ class TrainVisualBERTObjective(PreTrainedBertModel):
             output_dict["pooled_output"] = pooled_output
             output_dict["loss"] = None
             return output_dict
+
 
         if self.training_head_type == "pretraining":
             prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output)
@@ -1475,7 +1536,7 @@ class TrainVisualBERTObjective(PreTrainedBertModel):
                 output_dict["next_sentence_loss"] = next_sentence_loss
                 output_dict["masked_lm_loss"] = masked_lm_loss
                 output_dict["loss"] = masked_lm_loss + next_sentence_loss
-            
+
             if flat_masked_lm_labels is not None and is_random_next is None:
                 loss_fct = CrossEntropyLoss(ignore_index=-1)
                 masked_lm_loss = loss_fct(prediction_scores.contiguous().view(-1, self.config.vocab_size), flat_masked_lm_labels.contiguous().view(-1))
@@ -1529,7 +1590,7 @@ class TrainVisualBERTObjective(PreTrainedBertModel):
             output_dict["logits"] = prediction_scores
             output_dict["seq_relationship_score"] = seq_relationship_score
             output_dict["loss"] = None
-            
+
             loss_fct = CrossEntropyLoss(ignore_index=-1)
             masked_lm_loss = loss_fct(prediction_scores.contiguous().view(-1, self.config.vocab_size), flat_masked_lm_labels.contiguous().view(-1))
             output_dict["masked_lm_loss"] = masked_lm_loss

@@ -2,10 +2,10 @@
 {
   "dataset": "vcr",
 
-  "rationale": false, // Doing q->a or qa->r
+  "rationale": true, // Doing q->a or qa->r
 
-  "vcr_annots_dir":"/proj/vondrick/parita/projects/visualbert/X_VCR", //Please replace this with the actual corresponding folder
-  "vcr_image_dir":"/proj/vondrick/parita/projects/visualbert/X_VCR/vcr1images", //Please replace this with the actual corresponding folder
+  "vcr_annots_dir":"X_VCR", //Please replace this with the actual corresponding folder
+  "vcr_image_dir":"X_VCR/vcr1images", //Please replace this with the actual corresponding folder
 
   "use_fixed_feature": false,
   "image_screening_parameters": null,
@@ -14,15 +14,14 @@
   "special_screen": false,
   "add_all_features": true,
 
-
   "fp16": false,
   "loss_scale": 512, 
 
   "max_seq_length": 128,
   "bert_model_name": "bert-base-uncased",
   "do_lower_case": true,
-  "train_batch_size": 16,
-  "eval_batch_size":  4,
+  "train_batch_size": 32,
+  "eval_batch_size":  32,
 
   "pretraining": false,
   "pretraining_include_qar": false, // Whether we want to include qar for pre-training
@@ -31,18 +30,19 @@
 
   ////////Evlaution
   "do_test":false,
-  "vcr_save_result":true,
-  "skip_training": true,
-  "epoch_to_load": 9,
+  "vcr_save_result":false,
+  "skip_training": false,
+  "epoch_to_load": null,
 
   "patience": 3,
   "learning_rate": 2e-5,
-  "num_train_epochs":  11,
+  "num_train_epochs":  12,
   "warmup_proportion": 0.1,
   "grad_norm": 1.0,
   "gradient_accumulation_steps": 1,
 
-  "restore_bin": "/proj/vondrick/parita/projects/visualbert/self_trained_models/vcr/fine-tune-qa/model_state_epoch_9.th", //Specify which model to initialize from
+  "restore_bin": null,  //Specify which model to initialize from
+ 
   "num_workers": 8,
   "val_workers": 4,
 

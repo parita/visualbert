@@ -21,7 +21,7 @@ from pytorch_pretrained_bert.modeling import BertForMultipleChoice, TrainVisualB
 from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 
 @Model.register("VisualBERTDetector")
-class VisualBERTDetector(Model):
+class VisualFlowBERTDetector(Model):
     def __init__(self,
                  vocab: Vocabulary,
                  class_embs: bool=True,
@@ -30,29 +30,31 @@ class VisualBERTDetector(Model):
                  special_visual_initialize: bool=False,
                  text_only: bool=False,
                  visual_embedding_dim: int=512,
-                 visual_only: bool = False,
+                 flow_embedding_dim: int=512,
                  hard_cap_seq_len: int=None,
                  cut_first: str='text',
                  embedding_strategy: str='plain',
                  random_initialize: bool=False,
                  training_head_type: str="pretraining",
                  bypass_transformer: bool=False,
-                 pretrained_detector: bool=True,
+                 pretrained_extractor: bool=True,
                  output_attention_weights: bool=False
-            ):
-        super(VisualBERTDetector, self).__init__(vocab)
+                 ):
+        super(VisualFlowBERTDetector, self).__init__(vocab)
 
-        from utils.detector import SimpleDetector
-        self.detector = SimpleDetector(pretrained=pretrained_detector, average_pool=True, semantic=class_embs, final_dim=512)
+        from utils.flow_extractor import FlowNet2
+        self.flow_extractor = FlowNet2(pretrained=pretrained_extractor, average_pool=True,
+                                       semantic=class_embs, final_dim=512)
+        self.
         ##################################################################################################
-        self.bert = TrainVisualBERTObjective.from_pretrained(
+        self.bert = TrainVisualFlowBERTObjective.from_pretrained(
                 bert_model_name,
                 cache_dir=os.path.join(str(PYTORCH_PRETRAINED_BERT_CACHE), 'distributed_{}'.format(-1)),
                 training_head_type = training_head_type,
                 visual_embedding_dim = visual_embedding_dim,
+                flow_embedding_dim = flow_embedding_dim,
                 hard_cap_seq_len = hard_cap_seq_len,
                 cut_first = cut_first,
-                #visual_only = visual_only,      # Added by Parita
                 embedding_strategy = embedding_strategy,
                 bypass_transformer = bypass_transformer,
                 random_initialize = random_initialize,
@@ -118,22 +120,6 @@ class VisualBERTDetector(Model):
                 bert_input_ids: torch.LongTensor = None,
                 bert_input_mask: torch.LongTensor = None,
                 bert_input_type_ids: torch.LongTensor = None,
-
-                next_video_label: torch.LongTensor = None,
-                video_0: torch.Tensor = None,
-                video_1: torch.Tensor = None,
-
-                next_image_label: torch.LongTensor = None,
-                objects_0: torch.LongTensor = None,
-                objects_1: torch.LongTensor = None,
-                boxes_0: torch.Tensor = None,
-                boxes_1: torch.Tensor = None,
-                box_mask_0: torch.LongTensor = None,
-                box_mask_1: torch.LongTensor = None,
-                #image_dim_variable: torch.LongTensor = None,
-                #image_feat_variable: torch.Tensor = None,
-                #visual_embeddings_type: torch.LongTensor = None,
-
                 masked_lm_labels: torch.LongTensor = None,
                 is_random_next: torch.LongTensor= None,
                 image_text_alignment: torch.LongTensor = None,
@@ -142,84 +128,28 @@ class VisualBERTDetector(Model):
         # Trim off boxes that are too long. this is an issue b/c dataparallel, it'll pad more zeros that are
         # not needed
 
-        """
-        if image_feat_variable is not None:
-            image_mask = torch.arange(image_feat_variable.size(-2)).expand(
-                *image_feat_variable.size()[:-1]
-            ).cuda()
+        max_len = int(box_mask.sum(1).max().item())
+        objects = objects[:, :max_len]
+        box_mask = box_mask[:, :max_len]
+        boxes = boxes[:, :max_len]
+        segms = segms[:, :max_len]
+        '''for tag_type, the_tags in (('question', question_tags), ('answer', answer_tags)):
+            if int(the_tags.max()) > max_len:
+                raise ValueError("Oh no! {}_tags has maximum of {} but objects is of dim {}. Values are\n{}".format(
+                    tag_type, int(the_tags.max()), objects.shape, the_tags
+                ))'''
+        obj_reps = self.detector(images=images, boxes=boxes, box_mask=box_mask, classes=objects, segms=segms)
 
-            if len(image_dim_variable.size()) < len(image_mask.size()):
-                image_dim_variable = image_dim_variable.unsqueeze(-1)
-                assert(len(image_dim_variable.size()) == len(image_mask.size()))
-            image_mask = image_mask < image_dim_variable
-            image_mask = image_mask.long()
+        #print("obj_reps", obj_reps['obj_reps'].size())
+        #print("bert_input_ids", bert_input_ids.size())
+        #print("box_mask", box_mask.size())
 
+        if len(bert_input_ids.size()) == 2: # Using complete shuffle mode
+            obj_reps_expanded = obj_reps['obj_reps']
+            box_mask_expanded = box_mask
         else:
-        """
-
-        if next_image_label is not None:
-            image_mask = None
-
-            images_0 = images[:, 0]
-            max_len_0 = int(box_mask_0.sum(1).max().item())
-            objects_0 = objects_0[:, :max_len_0]
-            box_mask_0 = box_mask_0[:, :max_len_0]
-            boxes_0 = boxes_0[:, :max_len_0]
-
-            obj_reps_0 = self.detector(images = images_0, boxes = boxes_0,
-                                       box_mask = box_mask_0, classes = objects_0,
-                                       segms = None)
-
-            obj_reps_expanded_0 = obj_reps_0['obj_reps']
-            box_mask_expanded_0 = box_mask_0
-            visual_embeddings_type_0 = torch.zeros(*obj_reps_expanded_0.size()[:2]).long().cuda()
-
-            images_1 = images[:, 1]
-            max_len_1 = int(box_mask_1.sum(1).max().item())
-            objects_1 = objects_1[:, :max_len_1]
-            box_mask_1 = box_mask_1[:, :max_len_1]
-            boxes_1 = boxes_1[:, :max_len_1]
-            #segms_1 = segms[:, 1, :max_len_1]
-            obj_reps_1 = self.detector(images = images_1, boxes = boxes_1,
-                                       box_mask = box_mask_1, classes = objects_1,
-                                       segms = None)
-
-
-            obj_reps_expanded_1 = obj_reps_1['obj_reps']
-            box_mask_expanded_1 = box_mask_1
-            visual_embeddings_type_1 = torch.ones(*obj_reps_expanded_1.size()[:2]).long().cuda()
-
-            image_feat_variable = torch.cat(
-                (obj_reps_expanded_0, obj_reps_expanded_1), dim = 1)
-            image_mask = torch.cat(
-                (box_mask_expanded_0, box_mask_expanded_1), dim = 1)
-            visual_embeddings_type = torch.cat(
-                (visual_embeddings_type_0, visual_embeddings_type_1), dim = 1)
-
-        else:
-            max_len = int(box_mask.sum(1).max().item())
-            objects = objects[:, :max_len]
-            box_mask = box_mask[:, :max_len]
-            boxes = boxes[:, :max_len]
-            segms = segms[:, :max_len]
-            '''for tag_type, the_tags in (('question', question_tags), ('answer', answer_tags)):
-                if int(the_tags.max()) > max_len:
-                    raise ValueError("Oh no! {}_tags has maximum of {} but objects is of dim {}. Values are\n{}".format(
-                        tag_type, int(the_tags.max()), objects.shape, the_tags
-                    ))'''
-            obj_reps = self.detector(images=images, boxes=boxes, box_mask=box_mask, classes=objects, segms=segms)
-
-            if len(bert_input_ids.size()) == 2: # Using complete shuffle mode
-                obj_reps_expanded = obj_reps['obj_reps']
-                box_mask_expanded = box_mask
-            else:
-                obj_reps_expanded = obj_reps['obj_reps'].unsqueeze(1).expand(box_mask.size(0), bert_input_mask.size(1), box_mask.size(-1), obj_reps['obj_reps'].size(-1))
-                box_mask_expanded = box_mask.unsqueeze(1).expand(box_mask.size(0), bert_input_mask.size(1), box_mask.size(-1))
-
-            image_feat_variable = obj_reps_expanded
-            image_mask = box_mask_expanded
-
-            visual_embeddings_type = None
+            obj_reps_expanded = obj_reps['obj_reps'].unsqueeze(1).expand(box_mask.size(0), bert_input_mask.size(1), box_mask.size(-1), obj_reps['obj_reps'].size(-1))
+            box_mask_expanded = box_mask.unsqueeze(1).expand(box_mask.size(0), bert_input_mask.size(1), box_mask.size(-1))
 
         #bert_input_mask = torch.cat((bert_input_mask, box_mask_expanded), dim = -1)
 
@@ -228,10 +158,10 @@ class VisualBERTDetector(Model):
             token_type_ids = bert_input_type_ids,
             input_mask = bert_input_mask,
 
-            visual_embeddings = image_feat_variable,
+            visual_embeddings = obj_reps_expanded,
             position_embeddings_visual = None,
-            image_mask = image_mask,
-            visual_embeddings_type = visual_embeddings_type,
+            image_mask = box_mask_expanded,
+            visual_embeddings_type = None,
 
             image_text_alignment = image_text_alignment,
 
@@ -241,17 +171,11 @@ class VisualBERTDetector(Model):
 
             output_all_encoded_layers = output_all_encoded_layers)
 
-        if next_image_label is not None:
-            seq_relationship_score = output_dict["seq_relationship_score"]
-            next_image_loss = self._loss(seq_relationship_score.view(-1, 2),
-                                         next_image_label.view(-1))
-            output_dict["loss"] = next_image_loss
-
         #class_probabilities = F.softmax(logits, dim=-1)
+        cnn_loss = obj_reps['cnn_regularization_loss']
         if self.cnn_loss_ratio == 0.0:
             output_dict["cnn_regularization_loss"] = None
         else:
-            cnn_loss = obj_reps['cnn_regularization_loss']
             output_dict["cnn_regularization_loss"] = cnn_loss * self.cnn_loss_ratio
 
         # Multi-process safe??

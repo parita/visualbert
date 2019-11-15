@@ -5,6 +5,7 @@ import argparse
 import os
 import shutil
 from copy import deepcopy
+import traceback
 
 import multiprocessing
 import numpy as np
@@ -28,7 +29,7 @@ try:
     from visualbert.dataloaders.coco_dataset import COCODataset
 except:
     print("Import COCO dataset failed.")
-try:   
+try:
     from visualbert.dataloaders.nlvr_dataset import NLVRDataset
 except:
     print("Import NLVR2 dataset failed.")
@@ -40,6 +41,10 @@ try:
     from visualbert.dataloaders.flickr_dataset import Flickr30kFeatureDataset
 except:
     print("Import Flickr30K dataset failed.")
+try:
+    from visualbert.dataloaders.kinetics_dataset import KineticsDataset
+except:
+    print("Import Kinetics dataset failed.")
 
 from pytorch_pretrained_bert.optimization import BertAdam
 
@@ -85,7 +90,7 @@ parser.add_argument(
 args = parser.parse_args()
 
 args = ModelWrapper.read_and_insert_args(args, args.config)
-##################################################### 
+#####################################################
 
 if os.path.exists(args.folder):
     create_flag = 0
@@ -130,6 +135,7 @@ def _to_gpu(td):
             if td[k] is not None:
                 td[k] = {k2: v.cuda(non_blocking=True) for k2, v in td[k].items()} if isinstance(td[k], dict) else td[k].cuda(non_blocking=True)
     return td
+
 def _to_fp16(td):
     for k in td:
         if isinstance(td[k], torch.FloatTensor):
@@ -173,6 +179,8 @@ def get_dataset_loader(args, dataset_name):
         train, val, test = WikiDataset.splits(args)
     elif dataset_name == "flickr":
         train, val, test = Flickr30kFeatureDataset.splits(args)
+    elif dataset_name == "kinetics":
+        train, val, test = KineticsDataset.splits(args)
     else:
         assert(0)
 
@@ -182,7 +190,7 @@ def get_dataset_loader(args, dataset_name):
     val_loader_params["num_workers"] = val_workers
     test_loader_params = deepcopy(loader_params)
     test_loader_params["num_workers"] = val_workers
-    
+
     train_loader = VCRLoader.from_dataset(train, **train_loader_params)
     val_loader = VCRLoader.from_dataset(val, **val_loader_params)
     test_loader = VCRLoader.from_dataset(test, **test_loader_params)
@@ -224,7 +232,7 @@ print(args)
 print("########### Starting from {}".format(start_epoch))
 
 num_batches = 0
-    
+
 stop_epoch = args.num_train_epochs
 
 save_every = args.get("save_every", None)
@@ -237,13 +245,14 @@ for epoch_num in range(start_epoch, stop_epoch):
         for b, (time_per_batch, batch) in enumerate(time_batch(tqdm(train_loader), reset_every=ARGS_RESET_EVERY)):
 
             batch = _to_gpu(batch)
-            
+
             output_dict = train_model.step(batch)
 
             num_batches += 1
 
             train_results.append(pd.Series({'loss': output_dict['loss'].mean().item(),
                                             'crl': output_dict.get("cnn_regularization_loss", 0.0),
+                                            "next_image_loss": output_dict["next_image_loss"].mean().item() if "next_image_loss" in output_dict else 0.0,
                                             'next_sentence_loss': output_dict["next_sentence_loss"].mean().item() if "next_sentence_loss" in output_dict else 0.0,
                                             'masked_lm_loss': output_dict["masked_lm_loss"].mean().item() if "masked_lm_loss" in output_dict else 0.0,
                                             'accuracy': (train_model.model.module).get_metrics(
@@ -305,7 +314,6 @@ for epoch_num in range(start_epoch, stop_epoch):
                         val_acc += (output_dict["accuracy"] * output_dict["entity_num"].float()).sum(-1).item()
                         val_acc_upper += (output_dict["upperbound_accuracy"] * output_dict["entity_num"].float()).sum(-1).item()
                         val_instance_counter += output_dict["entity_num"].sum(-1).item()
-
                     elif args.model.training_head_type == "multichoice":
                         val_probs.append(output_dict['logits'].detach().cpu().numpy())
                         if not do_test:
@@ -349,6 +357,8 @@ for epoch_num in range(start_epoch, stop_epoch):
                 if not do_test:
                     val_labels = np.concatenate(val_labels, 0)
                 val_probs = np.concatenate(val_probs, 0)
+
+
                 if vcr_save_result:
                     if do_test:
                         file_name = "test"
@@ -367,6 +377,8 @@ for epoch_num in range(start_epoch, stop_epoch):
                     print("Saved result to {}".format(save_file_name))
                     assert(0)
 
+                val_labels = np.array(val_labels)
+                print(val_labels.shape, val_probs.argmax(1).shape)
                 acc = float(np.mean(val_labels == val_probs.argmax(1)))
             elif args.model.training_head_type == "nlvr":
                 val_labels = np.concatenate(val_labels, 0)
@@ -394,7 +406,7 @@ for epoch_num in range(start_epoch, stop_epoch):
             val_next_sentence_loss_avg = val_next_sentence_loss_sum / val_counter
             print("Val epoch {} has loss {:.5f}, next sentence loss {:.5f}".format(epoch_num, val_loss_avg, val_next_sentence_loss_avg), flush=True)
             val_metric_per_epoch.append(-val_loss_avg)
-        
+
         if int(np.argmax(val_metric_per_epoch)) < (len(val_metric_per_epoch) - 1 - args.patience):
             print("Stopping at epoch {:2d}".format(epoch_num))
             break
@@ -410,6 +422,6 @@ for epoch_num in range(start_epoch, stop_epoch):
         if not args.get("skip_training", False):
             train_model.save_checkpoint(args.folder, epoch_num, None, is_best=False)
         print("Something Went Wrong with Evaluation. Ignored.")
+        traceback.print_exception(*sys.exc_info())
         if args.get("skip_training", False):
             assert(0)
-        

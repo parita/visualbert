@@ -80,7 +80,7 @@ class COCODataset(Dataset):
         self.pretraining = args.pretraining
         self.masked_lm_prob = args.get("masked_lm_prob", 0.15)
 
-        with open(os.path.join('./cocoontology.json'), 'r') as f:
+        with open(os.path.join('../dataloaders/cocoontology.json'), 'r') as f:
             coco = json.load(f)
         self.coco_objects = ['__background__'] + [x['name'] for k, x in sorted(coco.items(), key=lambda x: int(x[0]))]
         self.coco_obj_to_ind = {o: i for i, o in enumerate(self.coco_objects)}
@@ -267,12 +267,13 @@ class COCODataset(Dataset):
         boxes *= img_scale
         boxes[:, :2] += np.array(padding[:2])[None]
         boxes[:, 2:] += np.array(padding[:2])[None]
-        
+
         try:
             metadata['names'] = [i.split(" ")[1][1:-1] for i in metadata["names"]]
         except:
             pass
         obj_labels = [self.coco_obj_to_ind[metadata['names'][i]] for i in dets2use.tolist()]
+
         boxes = np.row_stack((window, boxes))
         segms = np.concatenate((np.ones((1, 14, 14), dtype=np.float32), segms), 0)
         obj_labels = [self.coco_obj_to_ind['__background__']] + obj_labels
@@ -290,7 +291,7 @@ class COCODataset(Dataset):
 
         caption_a = item["caption"]
         imageID = item["image_id"]
-        
+
         sample["label"] = sample['objects'] # This is an useless field. Just so that they know the batch size.
 
         if self.expanded and index >= self.train_size:
@@ -298,13 +299,12 @@ class COCODataset(Dataset):
         else:
             coco = self.coco
 
+
         rest_anns = coco.loadAnns([i for i in coco.getAnnIds(imgIds=imageID) if i != item['id']])
 
         if self.args.get("two_sentence", True):
             if random.random() > 0.5:
                 item_b = self.items[random.randint(0, len(self.items) - 1)]
-                while item_b["image_id"] == imageID:
-                    item_b = self.items[random.randint(0, len(self.items) - 1)]
                 flag = False
             else:
                 item_b = rest_anns[random.randint(0, len(rest_anns) - 1)]

@@ -46,7 +46,7 @@ class NLVRDataset(Dataset):
         self.split = args.split
         self.text_only = args.get("text_only", False)
         self.no_next_sentence = args.get("no_next_sentence", False)
-        
+
         with open(self.annots_path, 'r') as f:
             self.items = [json.loads(s) for s in f]
 

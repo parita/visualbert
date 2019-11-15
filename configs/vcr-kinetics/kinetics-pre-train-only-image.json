@@ -1,17 +1,21 @@
 //4xV100s needed
 {
-  "dataset": "coco",
+  "dataset": "kinetics",
 
-  "data_root":"/proj/vondrick/parita/projects/visualbert/X_COCO", //Please replace this with the actual corresponding folder
+  "data_root":"/proj/vondrick/parita/projects/visualbert/X_KINETICS", //Please replace this with the actual corresponding folder
 
-  "expand_coco": true,
+  "image_feat_directory": null,
+  "use_fixed_feature": true,
+  "image_screening_parameters": {"image_feature_cap": 144},
+
+  "expand_coco": false,
   "exclude_minival": true,
 
-  "train_batch_size": 48,
-  "eval_batch_size": 48,
+  "train_batch_size": 12,
+  "eval_batch_size": 4,
   "use_detector": true,
 
-  "image_feature_type": "r2c",
+  "image_feature_type": "None",
 
   "max_seq_length": 128,
   "bert_model_name": "bert-base-uncased",
@@ -31,18 +35,20 @@
   "grad_norm": 1.0,
   "gradient_accumulation_steps": 1,
 
-  "num_workers": 8,
+  "num_workers": 16,
   "val_workers": 4,
   "fp16": false,
   "loss_scale": 0,
 
-  "restore_bin": "/proj/vondrick/parita/projects/visualbert/self_trained_models/vcr/coco-pre-train/model_state_epoch_2.th",  //Specify which model to initialize from
+  "restore_bin": "/proj/vondrick/parita/projects/visualbert/self_trained_models/vcr/coco-pre-train/model_state_epoch_9.th",  //Specify which model to initialize from
 
   "model": // Used for AllenNLP registed BERT model
   {
     "type": "VisualBERTDetector",
     "special_visual_initialize": true,
     "training_head_type": "pretraining",
-    "visual_embedding_dim": 512
+    "visual_embedding_dim": 512,
+    "visual_only": true,
+    "class_embs": false
   }
 }

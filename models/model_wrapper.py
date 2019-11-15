@@ -102,7 +102,7 @@ class ModelWrapper():
         # hack to remove pooler, which is not used
         # thus it produce None grad that break apex
 
-        # There seems to be something that we can't 
+        # There seems to be something that we can't
         param_optimizer = [n for n in param_optimizer if 'pooler' not in n[0]]
 
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
@@ -113,7 +113,7 @@ class ModelWrapper():
         num_train_optimization_steps = int(
             train_dataset_length / args.train_batch_size / args.gradient_accumulation_steps) * args.num_train_epochs
         self.num_train_optimization_steps = num_train_optimization_steps
-        
+
 
         if args.get("fp16", False):
             try:
@@ -124,8 +124,8 @@ class ModelWrapper():
 
             optimizer = FusedAdam(optimizer_grouped_parameters,
                                   lr=args.learning_rate,
-                                  bias_correction=False,
-                                  max_grad_norm=1.0)
+                                  bias_correction=False)
+                                  #max_grad_norm=1.0)
             if args.loss_scale == 0:
                 self.optimizer = FP16_Optimizer(optimizer, dynamic_loss_scale=True)
             else:
@@ -144,7 +144,7 @@ class ModelWrapper():
             model.half()
             print("Using FP 16, Model Halfed")
         self.model = DataParallel(model).cuda()
-        
+
 
     def load_state_dict(self, state_dict_to_load):
         if isinstance(self.model, DataParallel):
@@ -179,7 +179,7 @@ class ModelWrapper():
             shutil.copyfile(model_path, os.path.join(serialization_dir, "best.th"))
 
     def save_checkpoint_step(self, serialization_dir, step, epoch, is_best = False):
-        
+
         assert(serialization_dir)
         model_path = os.path.join(serialization_dir, "model_step_{}_epoch_{}.th".format(step, epoch))
         model_state = self.model.module.state_dict() if isinstance(self.model, DataParallel) else self.model.state_dict()
@@ -231,6 +231,17 @@ class ModelWrapper():
         else:
             print("No detector found.")
 
+    def freeze_flow_extractor(self):
+        if hasattr(self.model.module, 'flow_extractor'):
+            flow_extractor = self.model.module.flow_extractor
+            for submodule in flow_extractor.backbone.modules():
+                if isinstance(submodule, BatchNorm2d):
+                    submodule.track_running_stats = False
+                for p in submodule.parameters():
+                    p.requires_grad = False
+        else:
+            print("No flow extractor found.")
+
     @staticmethod
     def read_and_insert_args(args, confg):
         import commentjson
@@ -242,7 +253,3 @@ class ModelWrapper():
         args = AttrDict(config_json)
         args.model.bert_model_name = args.bert_model_name
         return args
-
-
-
-

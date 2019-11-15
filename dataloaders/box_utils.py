@@ -5,7 +5,8 @@ import scipy
 import warnings
 from torchvision.datasets.folder import default_loader
 from torchvision.transforms import functional
-from config_vcr import USE_IMAGENET_PRETRAINED
+#from config_vcr import USE_IMAGENET_PRETRAINED
+USE_IMAGENET_PRETRAINED = True
 
 
 ##### Image

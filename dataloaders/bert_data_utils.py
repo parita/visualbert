@@ -42,7 +42,7 @@ class InputExample(object):
         self.text_b = text_b
         self.is_correct = is_correct # This sort of serves as the correct label as well as the is_next label
 
-        # This should always be None. Right? 
+        # This should always be None. Right?
         assert(lm_labels is None)
         self.lm_labels = lm_labels  # masked words for language model
 
