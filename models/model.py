@@ -6,6 +6,7 @@ import os
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+import torchvision.models as models
 
 import torch.nn.parallel
 from allennlp.data.vocabulary import Vocabulary
@@ -17,7 +18,7 @@ from allennlp.modules.matrix_attention import BilinearMatrixAttention
 from allennlp.nn.util import masked_softmax, weighted_sum, replace_masked_values
 from allennlp.nn import InitializerApplicator
 
-from pytorch_pretrained_bert.modeling import BertForMultipleChoice, TrainVisualBERTObjective #BertForMultipleChoice, BertForVisualMultipleChoice, BertForVisualPreTraining, BertForPreTraining, BertForVisualQA
+from pytorch_pretrained_bert.modeling import BertForMultipleChoice, TrainVisualBERTObjective, TrainVideoBERTObjective #BertForMultipleChoice, BertForVisualMultipleChoice, BertForVisualPreTraining, BertForPreTraining, BertForVisualQA
 from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 
 @Model.register("VideoBERT")
@@ -38,12 +39,24 @@ class VideoBERT(Model):
                  training_head_type: str="pretraining",
                  bypass_transformer: bool=False,
                  pretrained_detector: bool=True,
+                 train_resnet: bool=True,
                  output_attention_weights: bool=False
             ):
         super(VideoBERT, self).__init__(vocab)
 
         from utils.detector import SimpleDetector
         self.detector = SimpleDetector(pretrained=pretrained_detector, average_pool=True, semantic=class_embs, final_dim=512)
+
+        # Load the Inception 3D model for extracting video features
+        self.resnet = models.resnet18(pretrained = True)
+        num_features = self.resnet.fc.in_features
+        if not train_resnet:
+            for param in self.resnet.parameters():
+                param.requires_grad = False
+
+        self.resnet.fc = nn.Linear(num_features, visual_embedding_dim)
+        self.visual_embedding_dim = visual_embedding_dim
+
         ##################################################################################################
         self.bert = TrainVideoBERTObjective.from_pretrained(
                 bert_model_name,
@@ -52,7 +65,6 @@ class VideoBERT(Model):
                 visual_embedding_dim = visual_embedding_dim,
                 hard_cap_seq_len = hard_cap_seq_len,
                 cut_first = cut_first,
-                #visual_only = visual_only,      # Added by Parita
                 embedding_strategy = embedding_strategy,
                 bypass_transformer = bypass_transformer,
                 random_initialize = random_initialize,
@@ -101,6 +113,14 @@ class VideoBERT(Model):
 
         return self.span_encoder(span_rep, span_mask), retrieved_feats
 
+    def extract_resnet_features(self, video, video_len):
+        feature_len = video.size(2)
+        features = torch.zeros(video.size(0), feature_len, self.visual_embedding_dim).cuda()
+        for idx in range(video_len[0]):
+            features[:, idx] = self.resnet(video[:, :, idx, :, :])
+
+        return features
+
     def forward(self,
                 images: torch.Tensor = None,
                 objects: torch.LongTensor = None,
@@ -122,14 +142,9 @@ class VideoBERT(Model):
                 next_video_label: torch.LongTensor = None,
                 video_0: torch.Tensor = None,
                 video_1: torch.Tensor = None,
+                video_frames_0: torch.LongTensor = None,
+                video_frames_1: torch.LongTensor = None,
 
-                next_image_label: torch.LongTensor = None,
-                objects_0: torch.LongTensor = None,
-                objects_1: torch.LongTensor = None,
-                boxes_0: torch.Tensor = None,
-                boxes_1: torch.Tensor = None,
-                box_mask_0: torch.LongTensor = None,
-                box_mask_1: torch.LongTensor = None,
                 #image_dim_variable: torch.LongTensor = None,
                 #image_feat_variable: torch.Tensor = None,
                 #visual_embeddings_type: torch.LongTensor = None,
@@ -142,59 +157,34 @@ class VideoBERT(Model):
         # Trim off boxes that are too long. this is an issue b/c dataparallel, it'll pad more zeros that are
         # not needed
 
-        """
-        if image_feat_variable is not None:
-            image_mask = torch.arange(image_feat_variable.size(-2)).expand(
-                *image_feat_variable.size()[:-1]
-            ).cuda()
+        if next_video_label is not None:
+            video_feature_0 = self.extract_resnet_features(video_0, video_frames_0)
+            video_feature_1 = self.extract_resnet_features(video_1, video_frames_1)
 
-            if len(image_dim_variable.size()) < len(image_mask.size()):
-                image_dim_variable = image_dim_variable.unsqueeze(-1)
-                assert(len(image_dim_variable.size()) == len(image_mask.size()))
-            image_mask = image_mask < image_dim_variable
-            image_mask = image_mask.long()
+            visual_embeddings_type_0 = torch.zeros(video_feature_0.size(0), video_feature_0.size(1)).long().cuda()
+            visual_embeddings_type_1 = torch.ones(video_feature_1.size(0), video_feature_1.size(1)).long().cuda()
 
-        else:
-        """
+            video_mask_0 = torch.arange(video_feature_0.size(1)).cuda().unsqueeze(0)
+            video_mask_0 = video_mask_0.expand(video_feature_0.size(0), -1)
+            video_mask_0 = video_mask_0 < video_frames_0.unsqueeze(1).expand(*video_mask_0.size())
+            video_mask_0 = video_mask_0.long()
 
-        if next_image_label is not None:
-            image_mask = None
+            video_mask_1 = torch.arange(video_feature_1.size(1)).cuda().unsqueeze(0)
+            video_mask_1 = video_mask_1.expand(video_feature_1.size(0), -1)
+            video_mask_1 = video_mask_1 < video_frames_1.unsqueeze(1).expand(*video_mask_1.size())
+            video_mask_1 = video_mask_1.long()
 
-            images_0 = images[:, 0]
-            max_len_0 = int(box_mask_0.sum(1).max().item())
-            objects_0 = objects_0[:, :max_len_0]
-            box_mask_0 = box_mask_0[:, :max_len_0]
-            boxes_0 = boxes_0[:, :max_len_0]
-
-            obj_reps_0 = self.detector(images = images_0, boxes = boxes_0,
-                                       box_mask = box_mask_0, classes = objects_0,
-                                       segms = None)
-
-            obj_reps_expanded_0 = obj_reps_0['obj_reps']
-            box_mask_expanded_0 = box_mask_0
-            visual_embeddings_type_0 = torch.zeros(*obj_reps_expanded_0.size()[:2]).long().cuda()
-
-            images_1 = images[:, 1]
-            max_len_1 = int(box_mask_1.sum(1).max().item())
-            objects_1 = objects_1[:, :max_len_1]
-            box_mask_1 = box_mask_1[:, :max_len_1]
-            boxes_1 = boxes_1[:, :max_len_1]
-            #segms_1 = segms[:, 1, :max_len_1]
-            obj_reps_1 = self.detector(images = images_1, boxes = boxes_1,
-                                       box_mask = box_mask_1, classes = objects_1,
-                                       segms = None)
-
-
-            obj_reps_expanded_1 = obj_reps_1['obj_reps']
-            box_mask_expanded_1 = box_mask_1
-            visual_embeddings_type_1 = torch.ones(*obj_reps_expanded_1.size()[:2]).long().cuda()
+            visual_embeddings_type = torch.cat(
+                (visual_embeddings_type_0, visual_embeddings_type_1), dim = 1
+            )
 
             image_feat_variable = torch.cat(
-                (obj_reps_expanded_0, obj_reps_expanded_1), dim = 1)
-            image_mask = torch.cat(
-                (box_mask_expanded_0, box_mask_expanded_1), dim = 1)
-            visual_embeddings_type = torch.cat(
-                (visual_embeddings_type_0, visual_embeddings_type_1), dim = 1)
+                (video_feature_0, video_feature_1), dim = 1
+            )
+
+            image_mask = torch.cat((video_mask_0, video_mask_1), dim = 1)
+
+            video_frames = video_frames_0 + video_frames_1
 
         else:
             max_len = int(box_mask.sum(1).max().item())
@@ -219,6 +209,10 @@ class VideoBERT(Model):
             image_feat_variable = obj_reps_expanded
             image_mask = box_mask_expanded
 
+            #print("[models/model] image_mask: {}".format(image_mask))
+            #print("[models/model] image_mask size: {}".format(image_mask.size()))
+            #print("[models/model] image_feat_variable size: {}".format(image_feat_variable.size()))
+
             visual_embeddings_type = None
 
         #bert_input_mask = torch.cat((bert_input_mask, box_mask_expanded), dim = -1)
@@ -241,11 +235,13 @@ class VideoBERT(Model):
 
             output_all_encoded_layers = output_all_encoded_layers)
 
+        """
         if next_image_label is not None:
             seq_relationship_score = output_dict["seq_relationship_score"]
             next_image_loss = self._loss(seq_relationship_score.view(-1, 2),
                                          next_image_label.view(-1))
             output_dict["loss"] = next_image_loss
+        """
 
         #class_probabilities = F.softmax(logits, dim=-1)
         if self.cnn_loss_ratio == 0.0:

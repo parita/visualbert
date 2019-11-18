@@ -18,6 +18,8 @@ from torch.nn import DataParallel
 from torch.nn.modules import BatchNorm2d
 from tqdm import tqdm
 
+from torchvision import transforms
+
 from allennlp.nn.util import device_mapping
 
 
@@ -45,6 +47,10 @@ try:
     from visualbert.dataloaders.kinetics_dataset import KineticsDataset
 except:
     print("Import Kinetics dataset failed.")
+try:
+    from visualbert.dataloaders.mpii_dataset import MPIIDataset
+except:
+    print("Import MPIIDataset failed.")
 
 from pytorch_pretrained_bert.optimization import BertAdam
 
@@ -181,6 +187,8 @@ def get_dataset_loader(args, dataset_name):
         train, val, test = Flickr30kFeatureDataset.splits(args)
     elif dataset_name == "kinetics":
         train, val, test = KineticsDataset.splits(args)
+    elif dataset_name == "mpii":
+        train, val, test = MPIIDataset.splits(args)
     else:
         assert(0)
 
@@ -253,6 +261,7 @@ for epoch_num in range(start_epoch, stop_epoch):
             train_results.append(pd.Series({'loss': output_dict['loss'].mean().item(),
                                             'crl': output_dict.get("cnn_regularization_loss", 0.0),
                                             "next_image_loss": output_dict["next_image_loss"].mean().item() if "next_image_loss" in output_dict else 0.0,
+                                            "next_video_loss": output_dict["next_video_loss"].mean().item() if "next_video_loss" in output_dict else 0.0,
                                             'next_sentence_loss': output_dict["next_sentence_loss"].mean().item() if "next_sentence_loss" in output_dict else 0.0,
                                             'masked_lm_loss': output_dict["masked_lm_loss"].mean().item() if "masked_lm_loss" in output_dict else 0.0,
                                             'accuracy': (train_model.model.module).get_metrics(

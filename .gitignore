@@ -16,3 +16,4 @@ self_trained_models/
 *.pkl
 *.th
 model_checkpoints/
+utils/pytorch-i3d

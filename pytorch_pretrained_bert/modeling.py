@@ -1666,7 +1666,6 @@ class BertVideoModel(PreTrainedBertModel):
         self.encoder = BertEncoder(config)
         self.pooler = BertPooler(config)
         self.bypass_transformer = config.bypass_transformer
-        self.visual_only = config.visual_only
 
         if self.bypass_transformer:
             self.additional_layer = BertLayer(config)
@@ -1708,6 +1707,19 @@ class BertVideoModel(PreTrainedBertModel):
         extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype) # fp16 compatibility
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
 
+        """
+        print("[pytorch_pretrained_bert/modeling/BertVideoModel] extended_attention_mask: {}".format(
+            extended_attention_mask.size()))
+
+        print("[pytorch_pretrained_bert/modeling/BertVideoModel] attention_mask: {}".format(
+            attention_mask.size()))
+
+        print("[pytorch_pretrained_bert/modeling/BertVideoModel] extended_attention_mask: {}".format(
+            extended_attention_mask))
+
+        print("[pytorch_pretrained_bert/modeling/BertVideoModel] attention_mask: {}".format(
+            attention_mask))
+        """
 
         if self.bypass_transformer and visual_embeddings is not None:
             assert(not output_all_encoded_layers) # Don't support this for the bypass model
@@ -1885,9 +1897,11 @@ class TrainVideoBERTObjective(PreTrainedBertModel):
             output_dict["loss"] = None
             return output_dict
 
-
         if self.training_head_type == "pretraining":
             prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output)
+
+            # print("[pytorch_pretrained_bert/modeling] seq_relationship_score: {}".format(seq_relationship_score))
+
             output_dict["logits"] = prediction_scores
             output_dict["seq_relationship_score"] = seq_relationship_score
             output_dict["loss"] = None
@@ -1897,6 +1911,8 @@ class TrainVideoBERTObjective(PreTrainedBertModel):
                 masked_lm_loss = loss_fct(prediction_scores.contiguous().view(-1, self.config.vocab_size), flat_masked_lm_labels.contiguous().view(-1))
                 next_sentence_loss = loss_fct(seq_relationship_score.contiguous().view(-1, 2), is_random_next.contiguous().view(-1))
                 output_dict["next_sentence_loss"] = next_sentence_loss
+                # print("[pytorch_pretrained_bert/modeling] next_sentence_loss: {}".format(next_sentence_loss))
+
                 output_dict["masked_lm_loss"] = masked_lm_loss
                 output_dict["loss"] = masked_lm_loss + next_sentence_loss
 
