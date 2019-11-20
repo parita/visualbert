@@ -15,13 +15,13 @@
   "add_all_features": true,
 
   "fp16": false,
-  "loss_scale": 512, 
+  "loss_scale": 512,
 
   "max_seq_length": 128,
   "bert_model_name": "bert-base-uncased",
   "do_lower_case": true,
-  "train_batch_size": 32,
-  "eval_batch_size":  4,
+  "train_batch_size": 48,
+  "eval_batch_size":  16,
 
   "pretraining": false,
   "pretraining_include_qar": false, // Whether we want to include qar for pre-training
@@ -41,8 +41,8 @@
   "grad_norm": 1.0,
   "gradient_accumulation_steps": 1,
 
-  "restore_bin": "/proj/vondrick/parita/projects/visualbert/self_trained_models/mpii/mpii-pre-train/model_state_epoch_5.th",
-  "num_workers": 16,
+  "restore_bin": "/proj/vondrick/parita/projects/visualbert/self_trained_models/mpii/mpii-pre-train-from-bert/model_state_epoch_5.th",
+  "num_workers": 32,
   "val_workers": 8,
 
   "freeze_detector": false,
